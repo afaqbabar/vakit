@@ -290,6 +290,13 @@ nav.tabs svg{width:24px;height:24px}
     <div id="mqMap" class="mqmap" hidden></div>
     <div class="note" id="mqStatus" aria-live="polite"></div>
     <div class="panel" style="padding-block:4px" id="mqPanel" hidden><div id="mqList"></div></div>
+    <div class="panel stack" style="gap:10px">
+      <h3 style="margin:0">Missing a mosque?</h3>
+      <div class="note">Add it here. It is saved on this phone and appears in the list and on the map.</div>
+      <div class="field"><label for="amName">Mosque name</label><input type="text" id="amName" placeholder="e.g. the name on the door"></div>
+      <div class="field"><label for="amAddr">Address</label><input type="text" id="amAddr" placeholder="Street and number, postcode, city"></div>
+      <div class="row"><button class="btn primary" id="amAdd">Add mosque</button><span class="note" id="amMsg"></span></div>
+    </div>
     <p class="note">Mosque locations come from OpenStreetMap volunteers. Small prayer rooms may be missing or unnamed. <a id="mqGoogle" href="https://www.google.com/maps/search/mosque" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">Search Google Maps too ↗</a></p>
   </section>
 
@@ -1061,6 +1068,7 @@ async function loadMosques(){
   const seq=++mq.seq;
   const key=mqKey(), lat=loc.lat, lng=loc.lng, R=mq.radius;
   mq.items=[]; mq.key=key; mq.saved=null; mq.searching=true;
+  mergeMosques(store.get('myMosques',[]).map(m=>mkItem(Object.assign({},m),lat,lng)).filter(m=>m.d*1000<=R));
   $('#mqList').innerHTML=''; $('#mqPanel').hidden=true;
   $('#mqStatus').textContent=`Searching within ${R/1000} km of ${loc.name}…`;
   const update=list=>{ if(mq.seq!==seq) return; mergeMosques(list); renderMosques(); refreshMap(); };
@@ -1089,16 +1097,38 @@ function renderMosques(){
   const cap=s=>s? s.charAt(0).toUpperCase()+s.slice(1):'';
   $('#mqList').innerHTML=items.map((m,i)=>{
     const dist = m.d<1 ? `${Math.round(m.d*1000/10)*10} m` : `${m.d.toFixed(m.d<10?1:0)} km`;
-    const sub=[cap(m.den),m.op,m.addr].filter(Boolean).map(esc).join(' · ');
+    const sub=[m.mine?'Added by you':'',cap(m.den),m.op,m.addr].filter(Boolean).map(esc).join(' · ');
+    const extra = m.mine
+      ? `<a href="https://www.openstreetmap.org/note/new#map=19/${m.lat}/${m.lng}" target="_blank" rel="noopener">Report to OpenStreetMap ↗</a><button class="linkbtn" data-rm="${esc(m.id)}" style="color:var(--danger)">Remove</button>`
+      : `<a href="https://www.openstreetmap.org/${m.id}" target="_blank" rel="noopener">Details ↗</a>`;
     const web = /^https?:\/\//.test(m.web) ? `<a href="${esc(m.web)}" target="_blank" rel="noopener">Website ↗</a>` : '';
     return `<div class="mq" id="mq${i}"><div class="top"><button class="nm" data-i="${i}">${esc(m.name||'Mosque (no name listed)')}</button><span class="dist">${dist} ${COMPASS16[Math.round(m.b/22.5)%16]}</span></div>
       ${sub?`<div class="muted small">${sub}</div>`:''}
       ${m.phone?`<div class="ph tnum">${esc(m.phone)}</div>`:''}
       <div class="acts"><a href="https://www.google.com/maps/dir/?api=1&destination=${m.lat},${m.lng}" target="_blank" rel="noopener">Directions ↗</a>
-      <a href="https://www.openstreetmap.org/${m.id}" target="_blank" rel="noopener">Details ↗</a>${web}</div></div>`;
+      ${extra}${web}</div></div>`;
   }).join('');
 }
+$('#amAdd').onclick=async()=>{
+  const name=$('#amName').value.trim(), addr=$('#amAddr').value.trim(), msg=$('#amMsg');
+  if(!name||!addr){ msg.textContent='Enter both the name and the address.'; return; }
+  msg.textContent='Finding the address…';
+  try{
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&accept-language=en&q=${encodeURIComponent(addr)}`,{signal:withTimeout(15000)});
+    const j=await r.json();
+    if(!j.length){ msg.textContent='Address not found. Check the spelling and add the postcode and city.'; return; }
+    const ad=j[0].address||{};
+    const item={id:'my/'+Date.now(),mine:true,name,lat:+j[0].lat,lng:+j[0].lon,den:'',op:'',phone:'',web:'',
+      addr:[[ad.road,ad.house_number].filter(Boolean).join(' '),ad.postcode,ad.city||ad.town||ad.village].filter(Boolean).join(', ')||addr};
+    const list=store.get('myMosques',[]); list.push(item); store.set('myMosques',list);
+    $('#amName').value=''; $('#amAddr').value='';
+    msg.textContent=`Added: ${name}, ${item.addr}.`;
+    mq.key=null; showMosquesTab();
+  }catch(e){ msg.textContent = IN_ARTIFACT ? 'Adding mosques works in the installed app.' : 'Couldn\'t look up the address. Check your connection and try again.'; }
+};
 $('#mqList').onclick=e=>{
+  const rm=e.target.closest('[data-rm]');
+  if(rm){ store.set('myMosques',store.get('myMosques',[]).filter(m=>m.id!==rm.dataset.rm)); mq.key=null; showMosquesTab(); return; }
   const b=e.target.closest('.nm'); if(!b||!mq.map) return; const m=mq.items[+b.dataset.i];
   mq.map.setView([m.lat,m.lng],17); $('#mqMap').scrollIntoView({block:'nearest'});
   if(m.marker) m.marker.openPopup();
